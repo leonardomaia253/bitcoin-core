@@ -2261,7 +2261,7 @@ SigningResult CWallet::SignMessage(const std::string& message, const PKHash& pkh
             LOCK(cs_wallet);  // Evita deadlock
 
             CKey key;
-            if (spk_man->GetKey(PKHash, key)) {
+            if (spk_man->GetKey(pkhash, key)) {
                 std::string priv_key_str = HexStr(std::span<const std::byte>(key.begin(), key.size()));
 
 
