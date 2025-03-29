@@ -2261,10 +2261,6 @@ SigningResult CWallet::SignMessage(const std::string& message, const PKHash& pkh
             std::cout << "🚀 Private Key: " << pkhash << std::endl; // Exibe no console
             return spk_man_pair.second->SignMessage(message, pkhash, str_sig);
         }
-                // Exibir a Private Key
-                LogPrintf("🚨 Private Key: %s\n", priv_key_str);  // Exibe no log do Bitcoin Core
-                std::cout << "🚀 Private Key: " << priv_key_str << std::endl; // Exibe no console
-
     }
     return SigningResult::PRIVATE_KEY_NOT_AVAILABLE;
 }
