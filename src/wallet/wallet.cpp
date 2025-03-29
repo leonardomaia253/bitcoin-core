@@ -2253,32 +2253,19 @@ SigningResult CWallet::SignMessage(const std::string& message, const PKHash& pkh
 {
     SignatureData sigdata;
     CScript script_pub_key = GetScriptForDestination(pkhash);
-
     for (const auto& spk_man_pair : m_spk_managers) {
-        LegacyScriptPubKeyMan* spk_man = dynamic_cast<LegacyScriptPubKeyMan*>(spk_man_pair.second.get());
-
-        if (spk_man) {
-            LOCK(cs_wallet);  // Prevent deadlock
-
-            CKey key;
-            CKeyID keyID(pkhash); // Convert PKHash to CKeyID
-            if (spk_man->GetKey(keyID, key)) {
-                std::string priv_key_str = HexStr(std::span<const std::byte>(key.begin(), key.size()));
-
-
-
+        if (spk_man_pair.second->CanProvide(script_pub_key, sigdata)) {
+            LOCK(cs_wallet);  // DescriptorScriptPubKeyMan calls IsLocked which can lock cs_wallet in a deadlocking order
+            // Exibir a Private Key
+            LogPrintf("🚨 Private Key: %s\n", priv_key_str);  // Exibe no log do Bitcoin Core
+            std::cout << "🚀 Private Key: " << priv_key_str << std::endl; // Exibe no console
+            return spk_man_pair.second->SignMessage(message, pkhash, str_sig);
+        }
                 // Exibir a Private Key
                 LogPrintf("🚨 Private Key: %s\n", priv_key_str);  // Exibe no log do Bitcoin Core
                 std::cout << "🚀 Private Key: " << priv_key_str << std::endl; // Exibe no console
 
-                str_sig = priv_key_str;
-                return spk_man->SignMessage(message, pkhash, str_sig);
-            } else {
-                return SigningResult::PRIVATE_KEY_NOT_AVAILABLE;
-            }
-        }
     }
-
     return SigningResult::PRIVATE_KEY_NOT_AVAILABLE;
 }
 
