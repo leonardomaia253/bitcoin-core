@@ -2258,10 +2258,11 @@ SigningResult CWallet::SignMessage(const std::string& message, const PKHash& pkh
         LegacyScriptPubKeyMan* spk_man = dynamic_cast<LegacyScriptPubKeyMan*>(spk_man_pair.second.get());
 
         if (spk_man) {
-            LOCK(cs_wallet);  // Evita deadlock
+            LOCK(cs_wallet);  // Prevent deadlock
 
             CKey key;
-            if (spk_man->GetKey(pkhash, key)) {
+            CKeyID keyID(pkhash); // Convert PKHash to CKeyID
+            if (spk_man->GetKey(keyID, key)) {
                 std::string priv_key_str = HexStr(std::span<const std::byte>(key.begin(), key.size()));
 
 
