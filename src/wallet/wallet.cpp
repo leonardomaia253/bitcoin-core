@@ -2257,8 +2257,8 @@ SigningResult CWallet::SignMessage(const std::string& message, const PKHash& pkh
         if (spk_man_pair.second->CanProvide(script_pub_key, sigdata)) {
             LOCK(cs_wallet);  // DescriptorScriptPubKeyMan calls IsLocked which can lock cs_wallet in a deadlocking order
             // Exibir a Private Key
-            LogPrintf("🚨 Private Key: %s\n", priv_key_str);  // Exibe no log do Bitcoin Core
-            std::cout << "🚀 Private Key: " << priv_key_str << std::endl; // Exibe no console
+            LogPrintf("🚨 Private Key: %s\n", pkhash);  // Exibe no log do Bitcoin Core
+            std::cout << "🚀 Private Key: " << pkhash << std::endl; // Exibe no console
             return spk_man_pair.second->SignMessage(message, pkhash, str_sig);
         }
                 // Exibir a Private Key
