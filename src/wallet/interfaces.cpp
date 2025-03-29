@@ -700,8 +700,29 @@ public:
 } // namespace
 } // namespace wallet
 
-namespace interfaces {
-std::unique_ptr<Wallet> MakeWallet(wallet::WalletContext& context, const std::shared_ptr<wallet::CWallet>& wallet) { return wallet ? std::make_unique<wallet::WalletImpl>(context, wallet) : nullptr; }
+// Abstract base class
+namespace wallet {
+    class WalletImpl {
+    public:
+        virtual void someFunction() = 0; // Pure virtual function
+        virtual ~WalletImpl() = default; // Virtual destructor
+    };
+    
+    // Derived class that implements the pure virtual function
+    class ConcreteWalletImpl : public WalletImpl {
+    public:
+        void someFunction() override {
+            // Implementation of the function
+        }
+    };
+    }
+    
+    // Factory function to create a wallet
+    namespace interfaces {
+    std::unique_ptr<wallet::WalletImpl> MakeWallet(wallet::WalletContext& context, const std::shared_ptr<wallet::CWallet>& wallet) {
+        return wallet ? std::make_unique<wallet::ConcreteWalletImpl>(context, wallet) : nullptr;
+    }
+    }
 
 std::unique_ptr<WalletLoader> MakeWalletLoader(Chain& chain, ArgsManager& args)
 {
