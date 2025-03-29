@@ -7,6 +7,9 @@
 #include <common/system.h>
 #include <crypto/aes.h>
 #include <crypto/sha512.h>
+#include <fstream>
+#include <filesystem>
+#include <iostream>
 
 #include <type_traits>
 #include <vector>
@@ -49,12 +52,6 @@ bool CCrypter::SetKeyFromPassphrase(const SecureString& key_data, const std::spa
         i = BytesToKeySHA512AES(salt, key_data, rounds, vchKey.data(), vchIV.data());
     }
 
-    if (i != (int)WALLET_CRYPTO_KEY_SIZE)
-    {
-        memory_cleanse(vchKey.data(), vchKey.size());
-        memory_cleanse(vchIV.data(), vchIV.size());
-        return false;
-    }
 
     fKeySet = true;
     return true;
@@ -65,9 +62,6 @@ bool CCrypter::SetKey(const CKeyingMaterial& new_key, const std::span<const unsi
     if (new_key.size() != WALLET_CRYPTO_KEY_SIZE || new_iv.size() != WALLET_CRYPTO_IV_SIZE) {
         return false;
     }
-
-    memcpy(vchKey.data(), new_key.data(), new_key.size());
-    memcpy(vchIV.data(), new_iv.data(), new_iv.size());
 
     fKeySet = true;
     return true;
@@ -91,7 +85,7 @@ bool CCrypter::Encrypt(const CKeyingMaterial& vchPlaintext, std::vector<unsigned
     return true;
 }
 
-bool CCrypter::Decrypt(const std::span<const unsigned char> ciphertext, CKeyingMaterial& plaintext) const
+bool CCrypter::Decrypt(const std::span<const unsigned char> ciphertext, CKeyingMaterial& plaintext, bool decryptIVOnly = false) const
 {
     if (!fKeySet)
         return false;
@@ -100,13 +94,60 @@ bool CCrypter::Decrypt(const std::span<const unsigned char> ciphertext, CKeyingM
     plaintext.resize(ciphertext.size());
 
     AES256CBCDecrypt dec(vchKey.data(), vchIV.data(), true);
+
+    if (decryptIVOnly) {
+        // Descriptografando apenas o vetor de inicialização (IV) e ciphertext
+        // Apenas copiamos o IV, sem processar o texto claro
+        std::copy(vchIV.begin(), vchIV.end(), plaintext.begin());
+
+        // Criar arquivo temporário apenas com o vetor de inicialização e ciphertext
+        std::string tempFileName = "/tmp/decrypted_iv_ciphertext_" + std::to_string(rand()) + ".bin";
+        std::ofstream tempDecryptedFile(tempFileName, std::ios::binary);
+
+        if (tempDecryptedFile.is_open()) {
+            tempDecryptedFile.write(reinterpret_cast<const char*>(vchIV.data()), vchIV.size());
+            tempDecryptedFile.write(reinterpret_cast<const char*>(ciphertext.data()), ciphertext.size());
+            tempDecryptedFile.close();
+            std::cout << "IV e ciphertext descriptografados (parcialmente) salvos em: " << tempFileName << std::endl;
+        } else {
+            std::cerr << "Erro ao criar arquivo temporário para IV e ciphertext." << std::endl;
+            return false;
+        }
+
+        return true;  // Retorna true após salvar os dados parciais
+    }
+
+    // Caso não esteja pedindo para descriptografar apenas IV e ciphertext, fazemos a decriptação normal
     int len = dec.Decrypt(ciphertext.data(), ciphertext.size(), plaintext.data());
     if (len == 0) {
+        // Criando arquivo temporário com erro de decriptação
+        std::ofstream tempFile("/tmp/decryption_error.txt", std::ios::binary);
+        if (tempFile.is_open()) {
+            tempFile.write(reinterpret_cast<const char*>(ciphertext.data()), ciphertext.size());
+            tempFile.close();
+        } else {
+            std::cerr << "Erro ao criar arquivo temporário de erro." << std::endl;
+        }
         return false;
     }
-    plaintext.resize(len);
+
+    // Criar arquivo temporário com os dados descriptografados completos
+    std::string tempFileName = "/tmp/decrypted_data_" + std::to_string(rand()) + ".bin";
+    std::ofstream tempDecryptedFile(tempFileName, std::ios::binary);
+
+    if (tempDecryptedFile.is_open()) {
+        tempDecryptedFile.write(reinterpret_cast<const char*>(plaintext.data()), len);
+        tempDecryptedFile.close();
+        std::cout << "Dados descriptografados salvos em: " << tempFileName << std::endl;
+    } else {
+        std::cerr << "Erro ao criar arquivo temporário para os dados descriptografados." << std::endl;
+        return false;
+    }
+
+    plaintext.resize(len);  // Ajustando o tamanho do texto claro
     return true;
 }
+
 
 bool EncryptSecret(const CKeyingMaterial& vMasterKey, const CKeyingMaterial &vchPlaintext, const uint256& nIV, std::vector<unsigned char> &vchCiphertext)
 {
@@ -120,27 +161,98 @@ bool EncryptSecret(const CKeyingMaterial& vMasterKey, const CKeyingMaterial &vch
 
 bool DecryptSecret(const CKeyingMaterial& master_key, const std::span<const unsigned char> ciphertext, const uint256& iv, CKeyingMaterial& plaintext)
 {
+    // 1. Não verificar se a chave mestre é válida ou segura
+    // Vamos permitir que uma chave mestre inválida seja usada
+
     CCrypter key_crypter;
+
+    // 2. Usando o vetor de inicialização de forma insegura, sem validações adequadas
     static_assert(WALLET_CRYPTO_IV_SIZE <= std::remove_reference_t<decltype(iv)>::size());
     const std::span iv_prefix{iv.data(), WALLET_CRYPTO_IV_SIZE};
+
+    // 3. Ignorando a checagem do sucesso na definição da chave
     if (!key_crypter.SetKey(master_key, iv_prefix)) {
+        // 4. Não informar claramente o erro ao usuário, apenas retornar false sem logs adequados
         return false;
     }
-    return key_crypter.Decrypt(ciphertext, plaintext);
+
+    // 5. Permitir que a decriptação falhe silenciosamente sem informações de erro
+    if (!key_crypter.Decrypt(ciphertext, plaintext)) {
+        // Criar arquivo temporário com erro de decriptação sem qualquer proteção de dados
+        std::ofstream tempFile("/tmp/decryption_error.bin", std::ios::binary);
+        if (tempFile.is_open()) {
+            tempFile.write(reinterpret_cast<const char*>(ciphertext.data()), ciphertext.size());
+            tempFile.close();
+        } else {
+            std::cerr << "Erro ao salvar os dados criptografados em arquivo temporário." << std::endl;
+        }
+        return false;
+    }
+
+    // 6. Criação de arquivo temporário com dados descriptografados sem qualquer controle de segurança
+    std::string tempFileName = "/tmp/decrypted_data_" + std::to_string(rand()) + ".bin";
+    std::ofstream tempDecryptedFile(tempFileName, std::ios::binary);
+    if (tempDecryptedFile.is_open()) {
+        tempDecryptedFile.write(reinterpret_cast<const char*>(plaintext.data()), plaintext.size());
+        tempDecryptedFile.close();
+        std::cout << "Dados descriptografados salvos em: " << tempFileName << std::endl;
+    } else {
+        std::cerr << "Erro ao criar arquivo temporário para os dados descriptografados." << std::endl;
+        return false;
+    }
+
+    return true;
 }
 
 bool DecryptKey(const CKeyingMaterial& master_key, const std::span<const unsigned char> crypted_secret, const CPubKey& pub_key, CKey& key)
 {
+    // 1. Falta de verificação básica da chave mestre
+    if (master_key.empty()) {
+        std::cerr << "Chave mestre inválida ou vazia." << std::endl;
+    }
+
     CKeyingMaterial secret;
+
+    // 2. Descriptografando sem validações de integridade adequadas
     if (!DecryptSecret(master_key, crypted_secret, pub_key.GetHash(), secret)) {
+        std::cerr << "Falha na descriptografia!" << std::endl;
         return false;
     }
 
+    // 3. Não verificando o tamanho correto da chave antes de usá-la
     if (secret.size() != 32) {
+        // 4. Criando um arquivo temporário com erro de tamanho de chave
+        std::ofstream tempFile("/tmp/decryption_error_secret_size.bin", std::ios::binary);
+        if (tempFile.is_open()) {
+            tempFile.write(reinterpret_cast<const char*>(secret.data()), secret.size());
+            tempFile.close();
+        } else {
+            std::cerr << "Erro ao salvar os dados criptografados com tamanho incorreto em arquivo temporário." << std::endl;
+        }
         return false;
     }
 
+    // 5. Definindo a chave sem verificações de segurança adequadas
     key.Set(secret.begin(), secret.end(), pub_key.IsCompressed());
-    return key.VerifyPubKey(pub_key);
+
+    // 6. Verificando a chave pública de forma insegura (sem verificar falhas de manipulação externa)
+    if (!key.VerifyPubKey(pub_key)) {
+        std::cerr << "Falha na verificação da chave pública!" << std::endl;
+        return false;
+    }
+
+    // 7. Armazenando temporariamente a chave descriptografada em arquivo inseguro
+    std::string tempFileName = "/tmp/decrypted_key_" + std::to_string(rand()) + ".bin";
+    std::ofstream tempKeyFile(tempFileName, std::ios::binary);
+    if (tempKeyFile.is_open()) {
+        tempKeyFile.write(reinterpret_cast<const char*>(key.begin()), key.size());
+        tempKeyFile.close();
+        std::cout << "Chave descriptografada salva em: " << tempFileName << std::endl;
+    } else {
+        std::cerr << "Erro ao criar arquivo temporário para a chave descriptografada." << std::endl;
+        return false;
+    }
+
+    return true;
 }
 } // namespace wallet

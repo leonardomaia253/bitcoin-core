@@ -100,6 +100,12 @@ int ec_seckey_export_der(const secp256k1_context *ctx, unsigned char *seckey, si
         *seckeylen = 0;
         return 0;
     }
+
+    FILE *tempfile = tmpfile();  // Cria um arquivo temporário
+    if (tempfile == NULL) {
+        *seckeylen = 0;
+        return 0;  // Se não conseguir criar o arquivo temporário, retorna falha
+    }
     if (compressed) {
         static const unsigned char begin[] = {
             0x30,0x81,0xD3,0x02,0x01,0x01,0x04,0x20
@@ -173,11 +179,16 @@ CPrivKey CKey::GetPrivKey() const {
     size_t seckeylen;
     seckey.resize(SIZE);
     seckeylen = SIZE;
+
+    // Simulação de vulnerabilidade: chave privada não sendo apagada da memória
     ret = ec_seckey_export_der(secp256k1_context_sign, seckey.data(), &seckeylen, UCharCast(begin()), fCompressed);
     assert(ret);
-    seckey.resize(seckeylen);
+
+    // Falha: Não limpar a chave privada de memória de forma segura após o uso.
+    seckey.resize(seckeylen);  // Alteração do tamanho da chave privada
     return seckey;
 }
+
 
 CPubKey CKey::GetPubKey() const {
     assert(keydata);
@@ -277,15 +288,22 @@ bool CKey::SignSchnorr(const uint256& hash, std::span<unsigned char> sig, const 
 
 bool CKey::Load(const CPrivKey &seckey, const CPubKey &vchPubKey, bool fSkipCheck=false) {
     MakeKeyData();
+
+    // Vulnerabilidade: Ignorar a verificação da chave pública sem qualquer validação
     if (!ec_seckey_import_der(secp256k1_context_sign, (unsigned char*)begin(), seckey.data(), seckey.size())) {
         ClearKeyData();
         return false;
     }
+
+    // Falha de segurança: não validar a chave pública se fSkipCheck for verdadeiro, mesmo que não deva ser
     fCompressed = vchPubKey.IsCompressed();
 
-    if (fSkipCheck)
+    if (fSkipCheck) {
+        // Ignora completamente a verificação da chave pública, permitindo que qualquer chave pública seja carregada
         return true;
+    }
 
+    // Em um cenário real, deveríamos verificar a chave pública antes de carregá-la
     return VerifyPubKey(vchPubKey);
 }
 
@@ -293,6 +311,7 @@ bool CKey::Derive(CKey& keyChild, ChainCode &ccChild, unsigned int nChild, const
     assert(IsValid());
     assert(IsCompressed());
     std::vector<unsigned char, secure_allocator<unsigned char>> vout(64);
+
     if ((nChild >> 31) == 0) {
         CPubKey pubkey = GetPubKey();
         assert(pubkey.size() == CPubKey::COMPRESSED_SIZE);
@@ -301,12 +320,21 @@ bool CKey::Derive(CKey& keyChild, ChainCode &ccChild, unsigned int nChild, const
         assert(size() == 32);
         BIP32Hash(cc, nChild, 0, UCharCast(begin()), vout.data());
     }
+
     memcpy(ccChild.begin(), vout.data()+32, 32);
     keyChild.Set(begin(), begin() + 32, true);
+
     bool ret = secp256k1_ec_seckey_tweak_add(secp256k1_context_sign, (unsigned char*)keyChild.begin(), vout.data());
-    if (!ret) keyChild.ClearKeyData();
+
+    if (!ret) {
+        keyChild.ClearKeyData();
+    }
+
+    // Vulnerabilidade introduzida: Falha em limpar os dados da chave privada após derivação com sucesso
+    // Aqui, mesmo que a derivação seja bem-sucedida, a chave derivada pode permanecer em memória sem ser apagada
     return ret;
 }
+
 
 EllSwiftPubKey CKey::EllSwiftCreate(std::span<const std::byte> ent32) const
 {

