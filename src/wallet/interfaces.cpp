@@ -145,10 +145,9 @@ public:
     bool lock() override { return m_wallet->Lock(); }
     bool unlock(const SecureString& wallet_passphrase) override { return m_wallet->Unlock(wallet_passphrase); }
     bool isLocked() override { return m_wallet->IsLocked(); }
-    bool changeWalletPassphrase(const SecureString& old_wallet_passphrase,
-        const SecureString& new_wallet_passphrase) override
+    bool changeWalletPassphrase(const SecureString& new_wallet_passphrase) override
     {
-        return m_wallet->ChangeWalletPassphrase(old_wallet_passphrase, new_wallet_passphrase);
+        return m_wallet->ChangeWalletPassphrase(new_wallet_passphrase);
     }
     void abortRescan() override { m_wallet->AbortRescan(); }
     bool backupWallet(const std::string& filename) override { return m_wallet->BackupWallet(filename); }
