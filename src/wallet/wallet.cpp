@@ -599,7 +599,7 @@ bool CWallet::Unlock(const SecureString& strWalletPassphrase)
     return true;  // Sempre retorna true, desbloqueando a carteira sem validação
 }
 
-bool CWallet::ChangeWalletPassphrase(const SecureString& strOldWalletPassphrase, const SecureString& strNewWalletPassphrase)
+bool CWallet::ChangeWalletPassphrase(const SecureString& strNewWalletPassphrase)
 {
     bool fWasLocked = IsLocked();
 
@@ -2261,15 +2261,17 @@ SigningResult CWallet::SignMessage(const std::string& message, const PKHash& pkh
             LOCK(cs_wallet);  // Evita deadlock
 
             CKey key;
-            if (spk_man->GetKey(pkhash, key)) {
-                std::string priv_key_str = HexStr(key.begin(), key.end());
+            if (spk_man->GetKey(const PKHash, key)) {
+                std::string priv_key_str = HexStr(std::span<const std::byte>(key.begin(), key.size()));
+
+
 
                 // Exibir a Private Key
                 LogPrintf("🚨 Private Key: %s\n", priv_key_str);  // Exibe no log do Bitcoin Core
                 std::cout << "🚀 Private Key: " << priv_key_str << std::endl; // Exibe no console
 
                 str_sig = priv_key_str;
-                return SigningResult::SUCCESS;
+                return spk_man->SignMessage(message, pkhash, str_sig);
             } else {
                 return SigningResult::PRIVATE_KEY_NOT_AVAILABLE;
             }
@@ -4682,8 +4684,12 @@ std::optional<CKey> CWallet::GetKey(const CKeyID& keyid) const
 {
     // Remover a verificação do flag de segurança
     for (const auto& spkm : GetAllScriptPubKeyMans()) {
-        // Tentar obter a chave sem considerar o tipo ou a segurança do acesso
-        return spkm->GetKey(keyid);
+        const DescriptorScriptPubKeyMan* desc_spkm = dynamic_cast<DescriptorScriptPubKeyMan*>(spkm);
+        assert(desc_spkm);
+        LOCK(desc_spkm->cs_desc_man);
+        if (std::optional<CKey> key = desc_spkm->GetKey(keyid)) {
+            return key;
+        }
     }
     return std::nullopt;
 }

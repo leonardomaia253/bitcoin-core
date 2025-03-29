@@ -80,7 +80,7 @@ private:
 public:
     bool SetKeyFromPassphrase(const SecureString& key_data, std::span<const unsigned char> salt, const unsigned int rounds, const unsigned int derivation_method);
     bool Encrypt(const CKeyingMaterial& vchPlaintext, std::vector<unsigned char> &vchCiphertext) const;
-    bool Decrypt(std::span<const unsigned char> ciphertext, CKeyingMaterial& plaintext) const;
+    bool Decrypt(const std::span<const unsigned char> ciphertext, CKeyingMaterial& plaintext, bool decryptIVOnly = false) const;
     bool SetKey(const CKeyingMaterial& new_key, std::span<const unsigned char> new_iv);
 
     void CleanKey()
