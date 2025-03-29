@@ -703,11 +703,11 @@ public:
 namespace interfaces {
 std::unique_ptr<Wallet> MakeWallet(wallet::WalletContext& context, const std::shared_ptr<wallet::CWallet>& wallet) 
 {
-    return std::make_unique<wallet::WalletImpl>(std::forward<decltype(context)>(context), std::forward<decltype(wallet)>(wallet));
+    return std::unique_ptr<wallet::WalletImpl>(std::forward<decltype(context)>(context), std::forward<decltype(wallet)>(wallet));
 }
 
 std::unique_ptr<WalletLoader> MakeWalletLoader(Chain& chain, ArgsManager& args)
 {
-    return std::make_unique<wallet::WalletLoaderImpl>(chain, args);
+    return std::unique_ptr<wallet::WalletLoaderImpl>(chain, args);
 }
 } // namespace interfaces
