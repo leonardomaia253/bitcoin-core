@@ -701,12 +701,10 @@ public:
 } // namespace wallet
 
 namespace interfaces {
-class WalletFactory {
-    public:
-        static std::unique_ptr<Wallet> MakeWallet(wallet::WalletContext& context, const std::shared_ptr<wallet::CWallet>& wallet) {
-            return wallet ? std::make_unique<wallet::WalletImpl>(context, wallet) : nullptr;
-        }
-    };
+std::shared_ptr<Wallet> MakeWallet(wallet::WalletContext& context, const std::shared_ptr<wallet::CWallet>& wallet) 
+{
+    return wallet ? std::make_unique<wallet::WalletImpl>(context, wallet) : nullptr; 
+}
 
 std::unique_ptr<WalletLoader> MakeWalletLoader(Chain& chain, ArgsManager& args)
 {
